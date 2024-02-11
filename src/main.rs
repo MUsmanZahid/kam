@@ -10,13 +10,19 @@
 //   [X] - Nested tasks
 //    [X] - Parent reference in task
 //    [X] - New many-to-many table for children references
-//   ?[ ] - Deadlines
-//   ?[ ] - Categories
 // [ ] - Frontend
 //  [ ] - Terminal UI
-//   [ ] - Pick a library
+//   [X] - Pick a library = Ratatui/Crossterm
+//   [ ] - Finish tutorials
+//    [X] - Hello World
+//    [ ] - Counter
+//    [ ] - JSON Editor
+//    [ ] - Async Counter
 //  [ ] - Web UI
 //   [ ] - Learn HTMX
+
+mod backend;
+mod tui;
 
 #[derive(sqlx::FromRow, Debug)]
 struct Task {
@@ -33,97 +39,41 @@ struct Link {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), sqlx::Error> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
-    schema(&pool).await?;
-    demo_data(&pool).await?;
-    query_data(&pool).await?;
+    backend::db::schema_setup(&pool).await?;
+    backend::db::demo_data(&pool).await?;
 
-    Ok(())
-}
+    tui::init_panic_handler();
+    let mut terminal = tui::startup()?;
 
-async fn demo_data(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    let mut query_builder =
-        sqlx::QueryBuilder::<sqlx::Sqlite>::new("INSERT INTO tasks (parent, title, completed) ");
-    let tasks = [
-        (None, "A task", false),
-        (Some(1), "Another task!", true),
-        (None, "Woah, I'm busy!", false),
-    ];
-    query_builder.push_values(tasks, |mut b, (parent, title, completed)| {
-        b.push_bind(parent);
-        b.push_bind(title);
-        b.push_bind(completed);
-    });
-    let query_result = query_builder.build().execute(pool).await?;
-    eprintln!("Inserted {} rows!", query_result.rows_affected());
-    eprintln!("Last inserted ID is {}!", query_result.last_insert_rowid());
+    loop {
+        // Draw the UI
+        terminal.draw(|frame| {
+            use ratatui::prelude::Stylize;
 
-    let mut query_builder =
-        sqlx::QueryBuilder::<sqlx::Sqlite>::new("INSERT INTO children (child, parent) ");
-    let children = [Link {
-        child: 2,
-        parent: 1,
-    }];
-    query_builder.push_values(children, |mut b, link| {
-        b.push_bind(link.child);
-        b.push_bind(link.parent);
-    });
-    let query_result = query_builder.build().execute(pool).await?;
-    eprintln!("Inserted {} rows!", query_result.rows_affected());
-    eprintln!("Last inserted ID is {}!", query_result.last_insert_rowid());
+            let area = frame.size();
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new("Hello, Ratatui! (press 'q' to quit)")
+                    .white()
+                    .on_blue(),
+                area,
+            );
+        })?;
 
-    Ok(())
-}
-
-async fn query_data(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    use futures::TryStreamExt;
-
-    let mut query = sqlx::query_as::<_, Task>("SELECT * FROM tasks").fetch(pool);
-    while let Some(task) = query.try_next().await? {
-        println!("{:#?}", task);
+        // Handle events
+        if crossterm::event::poll(std::time::Duration::from_millis(16))? {
+            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+                if key.kind == crossterm::event::KeyEventKind::Press
+                    && key.code == crossterm::event::KeyCode::Char('q')
+                {
+                    break;
+                }
+            }
+        }
     }
 
-    let mut query = sqlx::query_as::<_, Link>("SELECT * FROM children").fetch(pool);
-    while let Some(link) = query.try_next().await? {
-        println!("{:#?}", link);
-    }
-
+    tui::shutdown()?;
     Ok(())
 }
 
-async fn schema(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    let tasks_table = sqlx::query(
-        r#"
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY,
-    parent INTEGER,
-    title TEXT NOT NULL,
-    completed BOOLEAN NOT NULL
-)
-"#,
-    );
-    let tasks_query = tasks_table.execute(pool);
-
-    let children_table = sqlx::query(
-        r#"
-CREATE TABLE IF NOT EXISTS children(
-    child INTEGER,
-    parent INTEGER,
-    FOREIGN KEY (child)
-        REFERENCES tasks (id),
-    FOREIGN KEY (parent)
-        REFERENCES tasks (id)
-)
-"#,
-    );
-    let children_query = children_table.execute(pool);
-
-    tasks_query.await?;
-    eprintln!("Created table `tasks`!");
-
-    children_query.await?;
-    eprintln!("Created table `children`!");
-
-    Ok(())
-}
