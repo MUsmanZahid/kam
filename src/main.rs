@@ -15,7 +15,7 @@
 //   [X] - Pick a library = Ratatui/Crossterm
 //   [ ] - Finish tutorials
 //    [X] - Hello World
-//    [ ] - Counter
+//    [X] - Counter
 //    [ ] - JSON Editor
 //    [ ] - Async Counter
 //  [ ] - Web UI
@@ -25,55 +25,66 @@ mod backend;
 mod tui;
 
 #[derive(sqlx::FromRow, Debug)]
-struct Task {
-    id: i64,
-    parent: Option<i64>,
-    title: String,
-    completed: bool,
+pub(crate) struct Task {
+    pub(crate) id: i64,
+    pub(crate) parent: Option<i64>,
+    pub(crate) title: String,
+    pub(crate) completed: bool,
 }
 
 #[derive(sqlx::FromRow, Debug)]
-struct Link {
-    child: i64,
-    parent: i64,
+pub(crate) struct Link {
+    pub(crate) child: i64,
+    pub(crate) parent: i64,
+}
+
+struct App {
+    counter: i64,
+    should_quit: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await?;
-    backend::db::schema_setup(&pool).await?;
-    backend::db::demo_data(&pool).await?;
+    // let pool = backend::init().await?;
 
     tui::init_panic_handler();
-    let mut terminal = tui::startup()?;
+    let terminal = tui::startup()?;
+    run(terminal)?;
+    Ok(tui::shutdown()?)
+}
 
-    loop {
-        // Draw the UI
-        terminal.draw(|frame| {
-            use ratatui::prelude::Stylize;
+fn run(mut terminal: tui::Terminal) -> Result<(), std::io::Error> {
+    let mut app = App {
+        counter: 0,
+        should_quit: false,
+    };
 
-            let area = frame.size();
-            frame.render_widget(
-                ratatui::widgets::Paragraph::new("Hello, Ratatui! (press 'q' to quit)")
-                    .white()
-                    .on_blue(),
-                area,
-            );
-        })?;
+    while !app.should_quit {
+        terminal.draw(|frame| ui(&app, frame))?;
+        update(&mut app)?;
+    }
 
-        // Handle events
-        if crossterm::event::poll(std::time::Duration::from_millis(16))? {
-            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
-                if key.kind == crossterm::event::KeyEventKind::Press
-                    && key.code == crossterm::event::KeyCode::Char('q')
-                {
-                    break;
-                }
+    Ok(())
+}
+
+fn ui(app: &App, f: &mut ratatui::Frame) {
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(format!("Counter: {}", app.counter)),
+        f.size(),
+    );
+}
+
+fn update(app: &mut App) -> Result<(), std::io::Error> {
+    if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+        if key.kind == crossterm::event::KeyEventKind::Press {
+            match key.code {
+                crossterm::event::KeyCode::Char('j') => app.counter -= 1,
+                crossterm::event::KeyCode::Char('k') => app.counter += 1,
+                crossterm::event::KeyCode::Char('q') => app.should_quit = true,
+                _ => {},
             }
         }
     }
 
-    tui::shutdown()?;
     Ok(())
 }
-
