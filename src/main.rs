@@ -21,70 +21,78 @@
 //  [ ] - Web UI
 //   [ ] - Learn HTMX
 
-mod backend;
 mod tui;
-
-#[derive(sqlx::FromRow, Debug)]
-pub(crate) struct Task {
-    pub(crate) id: i64,
-    pub(crate) parent: Option<i64>,
-    pub(crate) title: String,
-    pub(crate) completed: bool,
-}
-
-#[derive(sqlx::FromRow, Debug)]
-pub(crate) struct Link {
-    pub(crate) child: i64,
-    pub(crate) parent: i64,
-}
-
-struct App {
-    counter: i64,
-    should_quit: bool,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let pool = backend::init().await?;
-
     tui::init_panic_handler();
-    let terminal = tui::startup()?;
-    run(terminal)?;
-    Ok(tui::shutdown()?)
-}
+    let terminal = tui::startup(std::io::stderr())?;
+    let result = run(terminal)?;
+    tui::shutdown()?;
 
-fn run(mut terminal: tui::Terminal) -> Result<(), std::io::Error> {
-    let mut app = App {
-        counter: 0,
-        should_quit: false,
-    };
-
-    while !app.should_quit {
-        terminal.draw(|frame| ui(&app, frame))?;
-        update(&mut app)?;
+    if let Some(pairs) = result {
+        let json = serde_json::to_string(&pairs)?;
+        println!("{json}");
     }
 
     Ok(())
 }
 
-fn ui(app: &App, f: &mut ratatui::Frame) {
-    f.render_widget(
-        ratatui::widgets::Paragraph::new(format!("Counter: {}", app.counter)),
-        f.size(),
-    );
+fn run<B>(mut terminal: ratatui::Terminal<B>) -> std::io::Result<Option<tui::app::Pairs>>
+where
+    B: ratatui::backend::Backend,
+{
+    let mut app = tui::app::App::new();
+    let mut exiting = false;
+
+    while !exiting {
+        terminal.draw(|frame| tui::ui::ui(frame, &app))?;
+        exiting = update(&mut app)?;
+    }
+
+    terminal.show_cursor()?;
+    Ok(Some(app.pairs))
 }
 
-fn update(app: &mut App) -> Result<(), std::io::Error> {
+fn update(app: &mut tui::app::App) -> Result<bool, std::io::Error> {
     if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
         if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                crossterm::event::KeyCode::Char('j') => app.counter -= 1,
-                crossterm::event::KeyCode::Char('k') => app.counter += 1,
-                crossterm::event::KeyCode::Char('q') => app.should_quit = true,
-                _ => {},
+            match app.screen {
+                tui::app::Screen::Key => match key.code {
+                    crossterm::event::KeyCode::Backspace => {
+                        app.key.pop();
+                    }
+                    crossterm::event::KeyCode::Enter => app.screen = tui::app::Screen::Value,
+                    crossterm::event::KeyCode::Esc => app.screen = tui::app::Screen::Main,
+                    crossterm::event::KeyCode::Tab => app.screen = tui::app::Screen::Value,
+                    crossterm::event::KeyCode::Char(c) => app.key.push(c),
+                    _ => {}
+                },
+                tui::app::Screen::Main => match key.code {
+                    crossterm::event::KeyCode::Char('e') => {
+                        app.screen = tui::app::Screen::Key;
+                    }
+                    crossterm::event::KeyCode::Char('q') => {
+                        return Ok(true);
+                    }
+                    _ => {}
+                },
+                tui::app::Screen::Value => match key.code {
+                    crossterm::event::KeyCode::Backspace => {
+                        app.value.pop();
+                    }
+                    crossterm::event::KeyCode::Enter => {
+                        app.save_pair();
+                        app.screen = tui::app::Screen::Main;
+                    }
+                    crossterm::event::KeyCode::Esc => app.screen = tui::app::Screen::Main,
+                    crossterm::event::KeyCode::Tab => app.screen = tui::app::Screen::Key,
+                    crossterm::event::KeyCode::Char(c) => app.value.push(c),
+                    _ => {}
+                },
             }
         }
     }
 
-    Ok(())
+    Ok(false)
 }
