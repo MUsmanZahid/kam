@@ -1,6 +1,3 @@
-pub(crate) mod app;
-pub(crate) mod ui;
-
 pub type Terminal<W> = ratatui::Terminal<ratatui::prelude::CrosstermBackend<W>>;
 
 pub fn init_panic_handler() {

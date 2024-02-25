@@ -23,76 +23,176 @@
 
 mod tui;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+struct Task {
+    id: i64,
+    name: Box<str>,
+    complete: bool,
+    parent: Option<i64>,
+}
+
+struct App {
+    stack: Vec<i64>,
+    tasks: Vec<Task>,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let conn = rusqlite::Connection::open_in_memory()?;
+
+    conn.execute(
+        "
+        CREATE TABLE task (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            complete BOOLEAN NOT NULL DEFAULT 'FALSE' CHECK (complete IN (0, 1)),
+            parent INTEGER REFERENCES task (id)
+        );",
+        (),
+    )?;
+
     tui::init_panic_handler();
     let terminal = tui::startup(std::io::stderr())?;
-    let result = run(terminal)?;
+    run(terminal)?;
     tui::shutdown()?;
-
-    if let Some(pairs) = result {
-        let json = serde_json::to_string(&pairs)?;
-        println!("{json}");
-    }
-
     Ok(())
 }
 
-fn run<B>(mut terminal: ratatui::Terminal<B>) -> std::io::Result<Option<tui::app::Pairs>>
+fn run<B>(mut terminal: ratatui::Terminal<B>) -> std::io::Result<()>
 where
     B: ratatui::backend::Backend,
 {
-    let mut app = tui::app::App::new();
+    let app = ();
     let mut exiting = false;
 
     while !exiting {
-        terminal.draw(|frame| tui::ui::ui(frame, &app))?;
-        exiting = update(&mut app)?;
+        terminal.draw(|f| ui(f, app))?;
+        exiting = update()?;
     }
 
     terminal.show_cursor()?;
-    Ok(Some(app.pairs))
+    Ok(())
 }
 
-fn update(app: &mut tui::app::App) -> Result<bool, std::io::Error> {
+fn update() -> Result<bool, std::io::Error> {
     if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
-        if key.kind == crossterm::event::KeyEventKind::Press {
-            match app.screen {
-                tui::app::Screen::Key => match key.code {
-                    crossterm::event::KeyCode::Backspace => {
-                        app.key.pop();
-                    }
-                    crossterm::event::KeyCode::Enter => app.screen = tui::app::Screen::Value,
-                    crossterm::event::KeyCode::Esc => app.screen = tui::app::Screen::Main,
-                    crossterm::event::KeyCode::Tab => app.screen = tui::app::Screen::Value,
-                    crossterm::event::KeyCode::Char(c) => app.key.push(c),
-                    _ => {}
-                },
-                tui::app::Screen::Main => match key.code {
-                    crossterm::event::KeyCode::Char('e') => {
-                        app.screen = tui::app::Screen::Key;
-                    }
-                    crossterm::event::KeyCode::Char('q') => {
-                        return Ok(true);
-                    }
-                    _ => {}
-                },
-                tui::app::Screen::Value => match key.code {
-                    crossterm::event::KeyCode::Backspace => {
-                        app.value.pop();
-                    }
-                    crossterm::event::KeyCode::Enter => {
-                        app.save_pair();
-                        app.screen = tui::app::Screen::Main;
-                    }
-                    crossterm::event::KeyCode::Esc => app.screen = tui::app::Screen::Main,
-                    crossterm::event::KeyCode::Tab => app.screen = tui::app::Screen::Key,
-                    crossterm::event::KeyCode::Char(c) => app.value.push(c),
-                    _ => {}
-                },
-            }
+        if key.kind == crossterm::event::KeyEventKind::Press
+            && key.code == crossterm::event::KeyCode::Char('q')
+        {
+            return Ok(true);
         }
     }
 
     Ok(false)
+}
+
+fn ui(f: &mut ratatui::Frame, _app: ()) {
+    let chunks = ratatui::prelude::Layout::default()
+        .direction(ratatui::prelude::Direction::Vertical)
+        .constraints([
+            ratatui::prelude::Constraint::Length(3),
+            ratatui::prelude::Constraint::Min(2),
+            ratatui::prelude::Constraint::Length(3),
+        ])
+        .split(f.size());
+
+    f.render_widget(title("kam"), chunks[0]);
+    f.render_widget(content("SAMPLE TEXT"), chunks[1]);
+    f.render_widget(status("(q) to quit"), chunks[2]);
+}
+
+fn content<'a, T>(text: T) -> ratatui::widgets::Paragraph<'a>
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .style(ratatui::style::Style::default());
+
+    ratatui::widgets::Paragraph::new(ratatui::text::Text::styled(
+        text,
+        ratatui::style::Style::default().fg(ratatui::style::Color::White),
+    ))
+    .block(block)
+}
+
+fn status<'a, T>(text: T) -> ratatui::widgets::Paragraph<'a>
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .style(ratatui::style::Style::default());
+
+    ratatui::widgets::Paragraph::new(ratatui::text::Text::styled(
+        text,
+        ratatui::style::Style::default().fg(ratatui::style::Color::White),
+    ))
+    .block(block)
+}
+
+fn title<'a, T>(text: T) -> ratatui::widgets::Paragraph<'a>
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .style(ratatui::style::Style::default());
+
+    ratatui::widgets::Paragraph::new(ratatui::text::Text::styled(
+        text,
+        ratatui::style::Style::default().fg(ratatui::style::Color::White),
+    ))
+    .block(block)
+    .centered()
+}
+
+struct TreeTask<'a> {
+    content: &'a str,
+    id: i64,
+    depth: u16,
+    complete: bool,
+}
+
+struct Tree<'a> {
+    items: Vec<TreeTask<'a>>,
+    highlight: ratatui::style::Style,
+    style: ratatui::style::Style,
+}
+
+impl<'a> Tree<'a> {
+    fn new(tasks: &'a [Task], stack: &'_ mut Vec<i64>) -> Self {
+        let indent = 2;
+
+        Self {
+            items: Self::task_tree(indent, tasks, stack),
+            highlight: ratatui::style::Style::default(),
+            style: ratatui::style::Style::default(),
+        }
+    }
+
+    fn task_tree<'t>(indent: u16, tasks: &'t [Task], stack: &mut Vec<i64>) -> Vec<TreeTask<'t>> {
+        let mut tree = Vec::new();
+
+        for task in tasks {
+            match task.parent {
+                Some(id) => {
+                    match stack.iter().position(|&x| x == id) {
+                        Some(idx) => stack.truncate(idx + 1),
+                        None => stack.push(id),
+                    }
+                },
+                None => stack.clear(),
+            }
+
+            let depth = stack.len() as u16 * indent;
+            let task = TreeTask {
+                content: &task.name,
+                id: task.id,
+                depth,
+                complete: task.complete,
+            };
+            tree.push(task);
+        }
+
+        tree
+    }
 }
