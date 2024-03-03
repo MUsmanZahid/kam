@@ -153,8 +153,10 @@ struct TreeTask<'a> {
 }
 
 struct Tree<'a> {
-    items: Vec<TreeTask<'a>>,
+    block: Option<ratatui::widgets::Block<'a>>,
     highlight: ratatui::style::Style,
+    indicator: &'a str,
+    items: Vec<TreeTask<'a>>,
     style: ratatui::style::Style,
 }
 
@@ -163,8 +165,10 @@ impl<'a> Tree<'a> {
         let indent = 2;
 
         Self {
-            items: Self::task_tree(indent, tasks, stack),
+            block: None,
             highlight: ratatui::style::Style::default(),
+            indicator: ">",
+            items: Self::task_tree(indent, tasks, stack),
             style: ratatui::style::Style::default(),
         }
     }
@@ -174,11 +178,9 @@ impl<'a> Tree<'a> {
 
         for task in tasks {
             match task.parent {
-                Some(id) => {
-                    match stack.iter().position(|&x| x == id) {
-                        Some(idx) => stack.truncate(idx + 1),
-                        None => stack.push(id),
-                    }
+                Some(id) => match stack.iter().position(|&x| x == id) {
+                    Some(idx) => stack.truncate(idx + 1),
+                    None => stack.push(id),
                 },
                 None => stack.clear(),
             }
@@ -194,5 +196,90 @@ impl<'a> Tree<'a> {
         }
 
         tree
+    }
+}
+
+struct TreeState {
+    offset: usize,
+    selected: usize,
+}
+
+impl<'t> ratatui::widgets::StatefulWidgetRef for Tree<'t> {
+    type State = TreeState;
+
+    fn render_ref(
+        &self,
+        area: ratatui::prelude::Rect,
+        buf: &mut ratatui::prelude::Buffer,
+        state: &mut Self::State,
+    ) {
+        use ratatui::widgets::Widget;
+
+        let blank = " ".repeat(self.indicator.width());
+
+        buf.set_style(area, self.style);
+        self.block.render(area, buf);
+
+        let tree_area = self.block.as_ref().map_or(area, |block| block.inner(area));
+        if tree_area.is_empty() || self.items.is_empty() {
+            return;
+        }
+
+        let tree_height = tree_area.height as usize;
+        let (first_visible_index, last_visible_index) = (0, 1);
+        // self.get_item_bounds(state.selected, state.offset, tree_height);
+
+        // NOTE: Change the state's offset to be the beginning of the visible change
+        state.offset = first_visible_index;
+
+        let mut current_height = 0;
+        for (i, item) in self
+            .items
+            .iter()
+            .enumerate()
+            .skip(state.offset)
+            .take(last_visible_index - first_visible_index)
+        {
+            let item_height = item.height() as u16;
+
+            let (x, y) = {
+                let height = current_height;
+                current_height += item_height;
+                (tree_area.left(), tree_area.top() + height)
+            };
+
+            let row_area = ratatui::layout::Rect {
+                x,
+                y,
+                width: tree_area.width,
+                height: item_height,
+            };
+
+            let item_style = self.style.patch(item.style);
+            let is_selected = i == state.selected;
+            let item_area = {
+                let indicator_width = self.indicator.width() as u16;
+                ratatui::layout::Rect {
+                    x: row_area.x + indicator_width,
+                    width: row_area.width - indicator_width,
+                    ..row_area
+                }
+            };
+            item.content.render(item_area, buf);
+
+            for j in 0..item.content.height() {
+                let symbol = if is_selected && j == 0 {
+                    self.indicator
+                } else {
+                    &blank
+                };
+
+                buf.set_stringn(x, y + j as u16, symbol, tree_area.width as usize, item_style);
+            }
+
+            if is_selected {
+                buf.set_style(row_area, self.highlight);
+            }
+        }
     }
 }
