@@ -6,15 +6,15 @@ struct Args {
     all: bool,
     /// Complete a task
     #[arg(short, long, id = "ID")]
-    complete: Option<u64>,
+    complete: Option<i64>,
     /// ID of the task to query
-    id: Option<u64>,
+    id: Option<i64>,
     /// Create a new task
     #[arg(short, long, name = "TITLE")]
     new: Option<String>,
     /// Specify the parent of a new task
     #[arg(short, long, name = "PARENT")]
-    parent: Option<u64>,
+    parent: Option<i64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,7 +50,11 @@ fn schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 }
 
 mod task {
-    pub fn complete(conn: &rusqlite::Connection, id: u64) -> rusqlite::Result<()> {
+    pub fn complete(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<()> {
+        if exists(conn, id)?.is_none() {
+            println!("ERROR: Task `{id}` doesn't exist!");
+        }
+
         conn.query_row(
             "UPDATE task SET complete = 1 WHERE id = ? RETURNING name;",
             [id],
@@ -61,8 +65,14 @@ mod task {
         )
     }
 
-    pub fn list(conn: &rusqlite::Connection, id: Option<u64>, all: bool) -> rusqlite::Result<()> {
-        let id = id.map(|i| i as i64);
+    fn exists(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<bool>> {
+        conn.query_row("SELECT complete FROM task WHERE id = ?;", [id], |row| {
+            let complete: bool = row.get_unwrap(0);
+            Ok(Some(complete))
+        })
+    }
+
+    pub fn list(conn: &rusqlite::Connection, id: Option<i64>, all: bool) -> rusqlite::Result<()> {
         let sql = match (id, all) {
             (Some(_), true) => "SELECT id, name, complete FROM task WHERE parent = ?;",
             (Some(_), false) => {
@@ -75,7 +85,6 @@ mod task {
         };
 
         let mut statement = conn.prepare(sql)?;
-        // let mut rows = statement.query([id])?;
         let mut rows = match id {
             Some(id) => statement.query([id])?,
             None => statement.query([])?,
@@ -99,9 +108,16 @@ mod task {
     pub fn new(
         conn: &rusqlite::Connection,
         title: String,
-        parent: Option<u64>,
+        parent: Option<i64>,
     ) -> rusqlite::Result<()> {
-        let parent = parent.map(|p| p as i64);
+        if let Some(id) = parent {
+            match exists(conn, id)? {
+                Some(true) => println!("ERROR: Parent task `{id}` is already completed!"),
+                None => println!("ERROR: Parent task `{id}` doesn't exist!"),
+                _ => {},
+            }
+        }
+
         conn.query_row(
             "INSERT INTO task (name, parent) VALUES (?, ?) RETURNING id;",
             rusqlite::params![&title, parent],
