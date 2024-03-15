@@ -55,14 +55,32 @@ mod task {
             println!("ERROR: Task `{id}` doesn't exist!");
         }
 
-        conn.query_row(
-            "UPDATE task SET complete = 1 WHERE id = ? RETURNING name;",
-            [id],
-            |row| {
-                let title: String = row.get_unwrap(0);
-                Ok(println!("\u{1B}[9m{id}. {title}\u{1B}[0m"))
-            },
-        )
+        // Prepare SQL statements
+        let mut get_children =
+            conn.prepare("SELECT id FROM task WHERE complete = 0 AND parent = ?;")?;
+        let mut mark_complete =
+            conn.prepare("UPDATE task SET complete = 1 WHERE id = ? RETURNING name;")?;
+
+        // Setup for the task traversal
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(id);
+
+        while let Some(id) = queue.pop_front() {
+            let mut rows = get_children.query([id])?;
+
+            while let Some(row) = rows.next()? {
+                let id: i64 = row.get_unwrap(0);
+                queue.push_back(id);
+            }
+
+            let mut rows = mark_complete.query([id])?;
+            while let Some(row) = rows.next()? {
+                let name: String = row.get_unwrap(0);
+                println!("\u{1B}[9m{id}. {name}\u{1B}[0m")
+            }
+        }
+
+        Ok(())
     }
 
     fn exists(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<bool>> {
@@ -114,7 +132,7 @@ mod task {
             match exists(conn, id)? {
                 Some(true) => println!("ERROR: Parent task `{id}` is already completed!"),
                 None => println!("ERROR: Parent task `{id}` doesn't exist!"),
-                _ => {},
+                _ => {}
             }
         }
 
